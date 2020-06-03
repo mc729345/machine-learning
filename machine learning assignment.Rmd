@@ -1,0 +1,156 @@
+---
+title: 'Practical Machine Learning: Prediction Assignment'
+author: "Mike W"
+date: "03/06/2020"
+output: 
+        html_document:
+                code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+#library(gbm) 
+library(ggplot2)
+library(randomForest)
+#library(ranger)
+library(tidyverse)
+```
+
+## Summary
+In this project, I used data from accelerometers on the belt/forearm/arm/dumbell for 6 participants while lifting barbells correctly and incorrectly, in order to predict the manner in which they did their exercise. <br>
+
+Packages used in this analysis included: caret, ggplot2, randomForest, tidyverse.<br>
+
+My approach was as follows:<br>
+1. Loaded the training and testing data sets (19 622 and 20 observations, respectively) and cleaned them for modeling.<br>
+2. Set aside 70% of training data for model building, with 30% of training data remaining for initial cross-validation. <br> 
+3. Applied the random forest method to build a predictive model. The main tuning parameter used was the number of trees (i.e., 100, 200, 300). Performance on the cross-validation data determined which model was used (i.e., model with 200 trees). <br>
+4. Applied the selected random forest model to predict the classifications in the test data set.
+
+Of the three random forest models tested, Model 2 (200 trees) performed most accurately on the validation data, so this was used to for prediction in the test data. The predicted classifications are omitted from this report to avoid plagiarism. 
+
+## Background
+From assignment brief:
+
+> 
+>"Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it."
+>
+
+From dataset official documentation:
+
+>
+>"Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E)."
+>
+
+For more information, refer to the [dataset website](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har#weight_lifting_exercises).
+
+## Loading/cleaning data
+The training and test data sets are in the same working directory and are now being loaded. Several NA strings have been identified at this point.
+
+The *dim()* command reveals that there are 160 variables, with 19 622 observations in the training test and 20 observations in the testing set. We simplify our data sets by omitting empty columns, as well as variables that do not report accelerometer readings.
+
+We set aside 70% of training dataset for model building, and 30% for validation.
+```{r data}
+# read in data
+pmltrain <- read.csv("pml-training.csv", na.strings = c("NA", "", "#DIV/o!"))
+pmltest <- read.csv("pml-testing.csv", na.strings = c("NA", "", "#DIV/o!"))
+
+# dim(pmltrain)
+# dim(pmltest)
+
+# remove empty columns, and extraneous variables
+pmltrain <- pmltrain[, colSums(is.na(pmltrain)) == 0]
+pmltest <- pmltest[, colSums(is.na(pmltest)) == 0]
+
+excludevars <- grepl("^X|user_name|timestamp|window", names(pmltrain))
+pmltrain <- pmltrain[,!excludevars]
+excludevars2 <- grepl("^X|user_name|timestamp|window", names(pmltest))
+pmltest <- pmltest[,!excludevars2]
+
+# partitioning training data for model building
+set.seed(2020)
+fortraining <- createDataPartition(y = pmltrain$classe, p = 0.7, list = FALSE)
+pmltrainpart <- pmltrain[fortraining,]
+pmlnottrainpart <- pmltrain[-fortraining,]
+```
+From the training dataset, we plot the known technique classifications (i.e., A through E, as described above). Most observations were made while performing correct technique (A) but otherwise the groups have a similar number of observations.
+```{r fig1}
+classeplot <- pmltrain %>%
+        group_by(classe) %>%
+        summarize(counts = n()) %>%
+        mutate(classe = recode(classe, A = "A: Correct technique", B = "B: Elbows to front", C = "C: Lifting halfway", D = "D: Lowering halfway", E = "E: Hips to front"))
+        
+fig1 <- ggplot(classeplot, aes(x = classe, y = counts)) +
+        geom_bar(stat = "identity") +
+        ggtitle("Technique for dumbbell lifting") +
+        ylab("Frequency") +
+        xlab("Technique")
+```
+<center>
+```{r figalign, echo=FALSE}
+fig1
+```
+</center>
+## Random forest modelling
+We use the partitioned training data to construct a model using the random forest method. Random forests are a robust method of predicting classification data with a generally high accuracy rate. 
+
+We make 3 separate models, setting the number of trees to be 100, 200, and 300 (Model 1, 2, 3, respectively). 
+```{r randomforest, echo = TRUE}
+# generate random forest models with different numbers of trees
+set.seed(2020)
+rfmodel1 <- randomForest(classe ~ ., data = pmltrainpart, ntree = 100, importance = TRUE)
+rfmodel2 <- randomForest(classe ~ ., data = pmltrainpart, ntree = 200, importance = TRUE)
+rfmodel3 <- randomForest(classe ~ ., data = pmltrainpart, ntree = 300, importance = TRUE)
+```
+When we plot out the error rate as we average across more trees, we can see that the error rate stabilizes somwhere between 50 to 100 trees, but may continue to decline with additional trees added. The out-of-bag (OOB) error rate appears lowest with 300 trees (Model 3; 0.57%).
+```{r OOB}
+# check OOB estimates of error rate for each model
+rfmodel1
+rfmodel2
+rfmodel3
+
+# plot OOB error rate with 100 and 300 trees
+plot(rfmodel1)
+which.min(rfmodel1$err.rate[,1])
+
+plot(rfmodel3)
+which.min(rfmodel3$err.rate[,1])
+```
+During the construction of Model 1, OOB error seems to be lowest when 85 trees were generated. For Model 3, 300 trees yielded the lowest OOB error.
+```{r varimp}
+# show most important variables (model 1)
+varim <- varImpPlot(rfmodel1)
+```
+As demonstrated by the variable importance plot, the most important features of Model 1 for predictive accuracy are: yaw belt, roll belt, magnet dumbbell y.
+
+## Model selection with validation data
+Using the validation data, it appears that classfication accuracy (99.24%) is best with 200 trees (Model 2), but is otherwise comparable with 100 trees and 300 trees (Model 1 and Model 3).
+```{r validation}
+# use the validation data to test the models
+rfpredict1 <- predict(rfmodel1, pmlnottrainpart, type = "class")
+rfpredict2 <- predict(rfmodel2, pmlnottrainpart, type = "class")
+rfpredict3 <- predict(rfmodel3, pmlnottrainpart, type = "class")
+
+# confusion matrix for model 1
+confusionMatrix(rfpredict1, pmlnottrainpart$classe)
+
+# confusion matrix for model 2
+confusionMatrix(rfpredict2, pmlnottrainpart$classe)
+
+# confusion matrix for model 3
+confusionMatrix(rfpredict3, pmlnottrainpart$classe)
+
+```
+## Predicting activity with test data
+We use the final random forest model (with 200 trees) to predict the activity classification of the 20 test cases. The output is not displayed here, as per Coursera Honor Code.
+```{r test}
+# applying random forest model (100 trees) to test data
+rfpredictest <- predict(rfmodel2, pmltest, type = "class")
+
+# predictions redacted
+#rfpredictest
+```
+
+## References
+Ugulino W, Cardador D, Vega K, Velloso E, Milidiu R, Fuks H. Wearable Computing: Accelerometers’ Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. 
